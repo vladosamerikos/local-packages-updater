@@ -1,0 +1,12 @@
+[package]
+name = "actualizaciones-agent"
+version = "0.4.0"
+edition = "2021"
+
+[dependencies]
+actualizaciones-core = { path = "../core" }
+ksni = "0.3.6"
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "signal", "sync", "process"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
