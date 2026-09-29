@@ -155,6 +155,13 @@ impl AppState {
     }
 
     fn snapshot(&self) -> UiSnapshot {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.snapshot_locked()
+    }
+
+    // The caller holds publication so responses cannot carry a revision from
+    // a newer event alongside an older copy of the application data.
+    fn snapshot_locked(&self) -> UiSnapshot {
         let (checking_all, active_apps) = self.coordinator.snapshot();
         UiSnapshot {
             apps: self.lock_data().apps.clone(),
@@ -505,7 +512,7 @@ fn publish_state(app: &AppHandle) {
     let _publication = state.publication.lock().unwrap_or_else(|e| e.into_inner());
     state.revision.fetch_add(1, Ordering::Relaxed);
     state.write_state();
-    let _ = app.emit(EVENT_STATE_CHANGED, state.snapshot());
+    let _ = app.emit(EVENT_STATE_CHANGED, state.snapshot_locked());
     update_tray(app);
 }
 
