@@ -212,7 +212,7 @@ fn main() {
             let saved = app.state::<AppState>().lock_data().clone();
             build_tray(app, saved.autostart_enabled)?;
             app.state::<AppState>().persist();
-            update_tray(app);
+            update_tray(app.handle());
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -278,7 +278,7 @@ async fn update_app(app: AppHandle, id: String) -> Result<(), String> {
     state.busy.store(true, Ordering::Relaxed);
     publish_state(&app);
 
-    let result = run_script(&app, spec, spec.update_script, UPDATE_TIMEOUT).await;
+    let result = run_script(&app, spec.update_script, UPDATE_TIMEOUT).await;
     match result {
         Err(error) => set_error(&app, spec.id, error),
         Ok(_) => {
@@ -359,14 +359,13 @@ async fn check_all_inner(app: AppHandle) -> Result<(), String> {
 }
 
 async fn read_check_result(app: &AppHandle, spec: &AppSpec) -> Result<CheckResult, String> {
-    let output = run_script(app, spec, spec.check_script, CHECK_TIMEOUT).await?;
+    let output = run_script(app, spec.check_script, CHECK_TIMEOUT).await?;
     serde_json::from_slice::<CheckResult>(&output.stdout)
         .map_err(|_| "El script devolvió una respuesta JSON no válida".to_string())
 }
 
 async fn run_script(
     app: &AppHandle,
-    spec: &AppSpec,
     script: &str,
     time_limit: Duration,
 ) -> Result<std::process::Output, String> {
@@ -449,7 +448,8 @@ fn codex_is_running() -> bool {
 
 fn set_error(app: &AppHandle, id: &str, message: String) {
     let state = app.state::<AppState>();
-    if let Some(status) = state.lock_data().apps.iter_mut().find(|item| item.id == id) {
+    let mut data = state.lock_data();
+    if let Some(status) = data.apps.iter_mut().find(|item| item.id == id) {
         status.state = "error".to_string();
         status.error = Some(concise(&message, 180));
     }
