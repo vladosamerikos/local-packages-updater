@@ -9,8 +9,6 @@ use tokio::{process::Command, time::{sleep, timeout}, sync::broadcast};
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const STALE_AFTER: u64 = 12 * 60 * 60;
-const PERIODIC_CHECK: Duration = Duration::from_secs(12 * 60 * 60);
-const INITIAL_CHECK_DELAY: Duration = Duration::from_secs(90);
 
 
 #[derive(Clone, Copy)]
@@ -36,13 +34,13 @@ const APPS: [AppSpec; 2] = [
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
-    id: String,
+    pub id: String,
     name: String,
     installed: Option<String>,
     latest: Option<String>,
     pub update_available: bool,
     pub state: String,
-    error: Option<String>,
+    pub error: Option<String>,
     notice: Option<String>,
     checked_at: Option<u64>,
 }
@@ -195,6 +193,44 @@ impl AppState {
 pub fn create(state_file: PathBuf, resource_root: PathBuf) -> Result<Arc<AppState>, String> {
     Ok(Arc::new(AppState::new(state_file.clone(), resource_root, load_state(&state_file))?))
 }
+pub fn state_file_path() -> PathBuf {
+    let root = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from).filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("actualizaciones/state.json")
+}
+pub fn start_check_app(app: Arc<AppState>, id: &str) -> Result<tokio::task::JoinHandle<()>, String> {
+    let spec = *app_spec(id).ok_or("Aplicación desconocida")?;
+    let lease = app.coordinator.begin_app(spec.id)?;
+    Ok(tokio::spawn(async move {
+        check_one(app.clone(), spec).await;
+        drop(lease);
+        publish_state(&app);
+    }))
+}
+pub fn start_check_all(app: Arc<AppState>) -> Result<tokio::task::JoinHandle<()>, String> {
+    let ids: Vec<_> = APPS.iter().map(|spec| spec.id).collect();
+    let batch = app.coordinator.begin_all(&ids)?;
+    publish_state(&app);
+    Ok(tokio::spawn(async move { run_batch(app, batch).await }))
+}
+pub fn start_update_app(app: Arc<AppState>, id: &str) -> Result<tokio::task::JoinHandle<()>, String> {
+    let spec = *app_spec(id).ok_or("Aplicación desconocida")?;
+    let lease = app.coordinator.begin_app(spec.id)?;
+    {
+        let mut data = app.lock_data();
+        let status = data.apps.iter_mut().find(|item| item.id == spec.id).unwrap();
+        if !status.update_available { return Err("No hay una actualización confirmada para esta aplicación".into()); }
+        status.state = "updating".into(); status.error = None; status.notice = None;
+    }
+    publish_state(&app);
+    Ok(tokio::spawn(async move {
+        if let Err(error) = install_and_confirm(&app, &spec).await { set_error(&app, spec.id, error); }
+        drop(lease);
+        publish_state(&app);
+    }))
+}
 pub async fn check_all(app: Arc<AppState>) -> Result<UiSnapshot, String> { check_all_inner(app.clone()).await?; Ok(app.snapshot()) }
 pub async fn check_app(app: Arc<AppState>, id: String) -> Result<UiSnapshot, String> {
     let spec = *app_spec(&id).ok_or("Aplicación desconocida")?;
@@ -241,6 +277,10 @@ async fn check_all_inner(app: Arc<AppState>) -> Result<(), String> {
     let ids: Vec<_> = APPS.iter().map(|spec| spec.id).collect();
     let batch = app.coordinator.begin_all(&ids)?;
     publish_state(&app);
+    run_batch(app, batch).await;
+    Ok(())
+}
+async fn run_batch(app: Arc<AppState>, batch: operations::Batch) {
     // All workers start before awaiting any result. In-flight individual checks
     // are joined through their completion ticket rather than run a second time.
     let mut workers = Vec::new();
@@ -264,7 +304,6 @@ async fn check_all_inner(app: Arc<AppState>) -> Result<(), String> {
     }
     drop(batch.lease);
     publish_state(&app);
-    Ok(())
 }
 
 async fn check_one(app: Arc<AppState>, spec: AppSpec) {
@@ -437,15 +476,6 @@ fn write_json_atomically(path: &Path, value: &impl Serialize) -> std::io::Result
     }
 }
 
-fn state_file_path() -> PathBuf {
-    let root = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .unwrap_or_else(|| std::env::temp_dir());
-    root.join("actualizaciones/state.json")
-}
-
 fn now_seconds() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
@@ -467,3 +497,40 @@ fn script_error_message(details: &str) -> String {
 
 
 pub fn signal_process_group(pid: i32, signal: Signal) { let _ = kill(Pid::from_raw(-pid), signal); }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn interrupted_work_is_reset_and_cache_is_preserved() {
+        let mut data = StoredState::default();
+        data.apps[0].state = "updating".into();
+        data.apps[0].installed = Some("1.2.3".into());
+        data.apps[0].checked_at = Some(now_seconds());
+        let core = AppState::new(PathBuf::from("unused"), PathBuf::from("unused"), data).unwrap();
+        let snapshot = core.snapshot();
+        assert_eq!(snapshot.apps[0].state, "current");
+        assert_eq!(snapshot.apps[0].installed.as_deref(), Some("1.2.3"));
+        assert!(snapshot.active_apps.is_empty());
+    }
+    #[test]
+    fn marking_one_app_does_not_touch_the_other() {
+        let mut data = StoredState::default();
+        data.apps[1].state = "error".into();
+        data.apps[1].error = Some("red".into());
+        let other = serde_json::to_value(&data.apps[1]).unwrap();
+        mark_checking(&mut data, std::slice::from_ref(&APPS[0]));
+        assert_eq!(data.apps[0].state, "checking");
+        assert_eq!(serde_json::to_value(&data.apps[1]).unwrap(), other);
+    }
+    #[test]
+    fn all_joins_existing_individual_check() {
+        let coordinator = Coordinator::default();
+        let individual = coordinator.begin_app("codex-desktop").unwrap();
+        let batch = coordinator.begin_all(&["codex-desktop", "spotifast"]).unwrap();
+        assert!(matches!(batch.checks[0].1, PendingCheck::Existing(_)));
+        assert!(matches!(batch.checks[1].1, PendingCheck::New(_)));
+        assert!(coordinator.begin_app("spotifast").is_err());
+        drop(individual);
+    }
+}
