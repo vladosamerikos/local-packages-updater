@@ -1,6 +1,6 @@
 [package]
 name = "actualizaciones"
-version = "0.1.0"
+version = "0.2.0"
 description = "Comprobador manual de actualizaciones para Ubuntu"
 authors = ["Actualizaciones"]
 edition = "2021"

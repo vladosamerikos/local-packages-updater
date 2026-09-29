@@ -6,7 +6,7 @@ readonly inrelease_url="$repository/dists/stable/InRelease"
 readonly keyring='/usr/share/keyrings/chatgpt-archive-keyring.gpg'
 readonly package_name='chatgpt'
 
-for program in curl gpgv sha256sum awk dpkg-query dpkg; do
+for program in curl gpgv sha256sum awk dpkg-query dpkg gzip xz jq; do
   if ! command -v "$program" >/dev/null 2>&1; then
     printf 'Falta el comando necesario: %s\n' "$program" >&2
     exit 1
@@ -112,34 +112,13 @@ if [[ ${actual_hash,,} != "$expected_hash" ]]; then
   exit 1
 fi
 
-if [[ $index_suffix == xz ]]; then
-  latest=$(/usr/bin/xzcat "$package_cache" | /usr/bin/awk '
-    BEGIN { RS=""; FS="\n" }
-    {
-      name=""; arch=""; version=""
-      for (i=1; i<=NF; i++) {
-        if ($i ~ /^Package: /) { name=substr($i,10) }
-        else if ($i ~ /^Architecture: /) { arch=substr($i,15) }
-        else if ($i ~ /^Version: /) { version=substr($i,10) }
-      }
-      if (name == "chatgpt" && arch == "amd64") { print version; exit }
-    }
-  ')
-elif [[ $index_suffix == gz ]]; then
-  latest=$(/usr/bin/gzcat "$package_cache" | /usr/bin/awk '
-    BEGIN { RS=""; FS="\n" }
-    {
-      name=""; arch=""; version=""
-      for (i=1; i<=NF; i++) {
-        if ($i ~ /^Package: /) { name=substr($i,10) }
-        else if ($i ~ /^Architecture: /) { arch=substr($i,15) }
-        else if ($i ~ /^Version: /) { version=substr($i,10) }
-      }
-      if (name == "chatgpt" && arch == "amd64") { print version; exit }
-    }
-  ')
-else
-  latest=$(/usr/bin/awk '
+case "$index_suffix" in
+  xz) /usr/bin/xz -dc -- "$package_cache" >"$tmp_dir/Packages" ;;
+  gz) /usr/bin/gzip -dc -- "$package_cache" >"$tmp_dir/Packages" ;;
+  plain) cp -- "$package_cache" "$tmp_dir/Packages" ;;
+esac
+
+latest=$(/usr/bin/awk '
   BEGIN { RS=""; FS="\n" }
   {
     name=""; arch=""; version=""
@@ -150,8 +129,7 @@ else
     }
     if (name == "chatgpt" && arch == "amd64") { print version; exit }
   }
-  ' "$package_cache")
-fi
+  ' "$tmp_dir/Packages")
 if [[ ! $latest =~ ^[A-Za-z0-9.+:~_-]+$ ]]; then
   printf 'No se encontró una versión amd64 válida de Codex Desktop.\n' >&2
   exit 1

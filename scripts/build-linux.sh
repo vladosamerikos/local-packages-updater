@@ -27,8 +27,10 @@ fi
 npm ci
 npm run tauri -- build --bundles deb
 
-deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)
-if [[ -z $deb ]]; then
+package_name=$(node -p 'require("./src-tauri/tauri.conf.json").productName')
+package_version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+deb="src-tauri/target/release/bundle/deb/${package_name}_${package_version}_amd64.deb"
+if [[ ! -f $deb ]]; then
   printf 'Tauri terminó sin generar el paquete .deb esperado.\n' >&2
   exit 1
 fi

@@ -8,7 +8,7 @@ if (($# > 1)); then
 fi
 package=${1:-}
 if [[ -z $package ]]; then
-  package=$(find "$project_root/artifacts" -maxdepth 1 -type f -name '*.deb' -print -quit 2>/dev/null || true)
+  package=$(find "$project_root/artifacts" -maxdepth 1 -type f -name '*.deb' -print 2>/dev/null | sort -V | tail -n 1 || true)
 fi
 if [[ -z $package || ! -f $package ]]; then
   printf 'No se encontró un .deb. Ejecuta scripts/build-linux.sh primero.\n' >&2

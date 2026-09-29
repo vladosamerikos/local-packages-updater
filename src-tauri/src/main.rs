@@ -104,6 +104,7 @@ impl Default for StoredState {
 struct UiSnapshot {
     apps: Vec<AppStatus>,
     busy: bool,
+    checking_all: bool,
 }
 
 struct AppState {
@@ -111,6 +112,7 @@ struct AppState {
     state_file: PathBuf,
     operation: Mutex<()>,
     busy: AtomicBool,
+    checking_all: AtomicBool,
     allow_exit: AtomicBool,
     process_groups: StdMutex<HashSet<i32>>,
 }
@@ -124,6 +126,11 @@ impl AppState {
         }
         data.apps.retain(|app| APPS.iter().any(|spec| app.id == spec.id));
         for app in &mut data.apps {
+            // An interrupted operation must not leave the next session busy forever.
+            if app.state == "checking" || app.state == "updating" {
+                app.state = if app.checked_at.is_none() { "unchecked" }
+                    else if app.update_available { "available" } else { "current" }.to_string();
+            }
             if let Some(checked_at) = app.checked_at {
                 if now_seconds().saturating_sub(checked_at) > STALE_AFTER {
                     app.state = "error".to_string();
@@ -136,6 +143,7 @@ impl AppState {
             state_file,
             operation: Mutex::new(()),
             busy: AtomicBool::new(false),
+            checking_all: AtomicBool::new(false),
             allow_exit: AtomicBool::new(false),
             process_groups: StdMutex::new(HashSet::new()),
         }
@@ -145,6 +153,7 @@ impl AppState {
         UiSnapshot {
             apps: self.lock_data().apps.clone(),
             busy: self.busy.load(Ordering::Relaxed),
+            checking_all: self.checking_all.load(Ordering::Relaxed),
         }
     }
 
@@ -192,7 +201,7 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--autostart"]),
         ))
-        .invoke_handler(tauri::generate_handler![get_state, check_all, update_app])
+        .invoke_handler(tauri::generate_handler![get_state, check_all, check_app, update_app])
         .setup(|app| {
             let state_file = state_file_path();
             let mut data = load_state(&state_file);
@@ -260,10 +269,17 @@ async fn check_all(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn check_app(app: AppHandle, id: String) -> Result<(), String> {
+    let spec = app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
+    check_apps_inner(app, std::slice::from_ref(spec)).await
+}
+
+#[tauri::command]
 async fn update_app(app: AppHandle, id: String) -> Result<(), String> {
     let spec = app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
     let state = app.state::<AppState>();
-    let _operation = state.operation.lock().await;
+    let _operation = state.operation.try_lock()
+        .map_err(|_| "Espera a que termine la operación actual".to_string())?;
     let previous_version = {
         let mut data = state.lock_data();
         let status = data.apps.iter_mut().find(|item| item.id == spec.id).expect("registro de aplicación");
@@ -318,29 +334,41 @@ async fn update_app(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 async fn check_all_inner(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let _operation = state.operation.lock().await;
-    state.busy.store(true, Ordering::Relaxed);
-    {
-        let mut data = state.lock_data();
-        for status in &mut data.apps {
+    check_apps_inner(app, &APPS).await
+}
+
+fn mark_checking(data: &mut StoredState, specs: &[AppSpec]) {
+    for status in &mut data.apps {
+        if specs.iter().any(|spec| spec.id == status.id) {
             status.state = "checking".to_string();
             status.error = None;
         }
     }
+}
+
+async fn check_apps_inner(app: AppHandle, specs: &[AppSpec]) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let _operation = state.operation.try_lock()
+        .map_err(|_| "Espera a que termine la operación actual".to_string())?;
+    state.busy.store(true, Ordering::Relaxed);
+    state.checking_all.store(specs.len() == APPS.len(), Ordering::Relaxed);
+    {
+        let mut data = state.lock_data();
+        mark_checking(&mut data, specs);
+    }
     publish_state(&app);
 
-    for spec in APPS {
-        match read_check_result(&app, &spec).await {
+    for spec in specs {
+        match read_check_result(&app, spec).await {
             Ok(result) => {
                 let mut data = state.lock_data();
                 if let Some(status) = data.apps.iter_mut().find(|item| item.id == spec.id) {
                     status.installed = Some(result.installed);
                     status.latest = Some(result.latest);
                     status.update_available = result.update_available;
-            status.checked_at = Some(now_seconds());
-            status.state = if status.update_available { "available" } else { "current" }.to_string();
-            status.error = None;
+                    status.checked_at = Some(now_seconds());
+                    status.state = if status.update_available { "available" } else { "current" }.to_string();
+                    status.error = None;
                 }
             }
             Err(error) => {
@@ -354,6 +382,7 @@ async fn check_all_inner(app: AppHandle) -> Result<(), String> {
         publish_state(&app);
     }
     state.busy.store(false, Ordering::Relaxed);
+    state.checking_all.store(false, Ordering::Relaxed);
     publish_state(&app);
     Ok(())
 }
@@ -399,7 +428,8 @@ async fn run_script(
                 Ok(output)
             } else {
                 let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                Err(if details.is_empty() { "El proceso terminó con error".to_string() } else { concise(&details, 180) })
+                eprintln!("Error al ejecutar {script}: {details}");
+                Err(script_error_message(&details))
             }
         }
         Ok(Err(error)) => {
@@ -539,10 +569,9 @@ fn open_window(app: &AppHandle) {
     }
     match tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Actualizaciones")
-        .inner_size(440.0, 250.0)
-        .min_inner_size(400.0, 220.0)
-        .max_inner_size(620.0, 650.0)
-        .resizable(true)
+        .inner_size(540.0, 390.0)
+        .resizable(false)
+        .maximizable(false)
         .center()
         .build()
     {
@@ -607,6 +636,54 @@ fn now_seconds() -> u64 {
 fn concise(message: &str, max_chars: usize) -> String {
     let first_line = message.lines().find(|line| !line.trim().is_empty()).unwrap_or("Error desconocido").trim();
     first_line.chars().take(max_chars).collect()
+}
+
+fn script_error_message(details: &str) -> String {
+    // The scripts append a useful explanation after curl or shell diagnostics.
+    let message = details.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("").trim();
+    if message.is_empty() || message.starts_with('/') || message.starts_with("curl:") {
+        "No se pudo completar la operación. Vuelve a intentarlo.".to_string()
+    } else {
+        concise(message, 180)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checking_one_app_preserves_the_other_apps_state_and_version() {
+        let mut data = StoredState::default();
+        data.apps[0].state = "error".to_string();
+        data.apps[0].error = Some("Fallo de red".to_string());
+        data.apps[1].state = "current".to_string();
+        data.apps[1].installed = Some("0.11.0".to_string());
+        data.apps[1].checked_at = Some(1234);
+        let untouched = serde_json::to_value(&data.apps[1]).unwrap();
+
+        mark_checking(&mut data, std::slice::from_ref(&APPS[0]));
+
+        assert_eq!(data.apps[0].state, "checking");
+        assert!(data.apps[0].error.is_none());
+        assert_eq!(serde_json::to_value(&data.apps[1]).unwrap(), untouched);
+    }
+
+    #[test]
+    fn interrupted_checks_are_reset_when_reopening() {
+        let mut data = StoredState::default();
+        data.apps[0].state = "checking".to_string();
+        let state = AppState::new(PathBuf::from("unused"), data);
+        assert_eq!(state.snapshot().apps[0].state, "unchecked");
+        assert!(!state.snapshot().busy);
+    }
+
+    #[test]
+    fn error_uses_the_scripts_explanation_instead_of_a_curl_diagnostic() {
+        assert_eq!(script_error_message("curl: (6) Could not resolve host\nNo se pudieron consultar las versiones de Codex Desktop.\n"),
+            "No se pudieron consultar las versiones de Codex Desktop.");
+        assert!(!script_error_message("/usr/lib/Actualizaciones/apps/check.sh: comando no encontrado").contains("/usr/lib"));
+    }
 }
 
 fn signal_process_group(pid: i32, signal: Signal) {
