@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Actualizaciones",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "es.vlad.actualizaciones",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -17,14 +17,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb"],
+    "targets": [
+      "deb"
+    ],
     "category": "Utility",
     "shortDescription": "Actualizador de Codex Desktop y Spotifast",
     "longDescription": "Comprueba e instala actualizaciones de Codex Desktop y Spotifast en Ubuntu.",
     "icon": [
+      "icons/16x16.png",
+      "icons/24x24.png",
       "icons/32x32.png",
+      "icons/48x48.png",
+      "icons/64x64.png",
       "icons/128x128.png",
-      "icons/256x256.png"
+      "icons/256x256.png",
+      "icons/512x512.png"
     ],
     "resources": {
       "resources/apps/": "apps/"
@@ -35,14 +42,12 @@
         "depends": [
           "curl",
           "flatpak",
-          "gnupg",
-          "gzip",
-          "jq",
+          "gpgv",
+          "liblzma5",
           "libayatana-appindicator3-1",
           "libgtk-3-0t64",
           "libwebkit2gtk-4.1-0",
-          "pkexec",
-          "xz-utils"
+          "pkexec"
         ]
       }
     }

@@ -10,15 +10,12 @@
     <main id="app" aria-label="Actualizaciones">
       <header class="app-header">
         <h1>Aplicaciones</h1>
-        <button class="check-button" id="check-all" type="button" disabled>Verificar todas</button>
+        <button class="check-button" id="check-all" type="button">Verificar todas</button>
       </header>
       <section class="app-list" id="app-list" aria-live="polite" aria-label="Aplicaciones">
         <p class="loading">Cargando estado…</p>
       </section>
-      <footer class="app-footer" id="feedback" role="status">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>
-        <span>Verificación automática cada 12 horas</span>
-      </footer>
+      <div class="toast" id="feedback" role="alert" hidden></div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -1,57 +1,57 @@
 #!/usr/bin/env python3
+"""Export the generated launcher master and draw the symbolic tray icons."""
 from pathlib import Path
-
+import math
 from PIL import Image, ImageDraw
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ICON_DIR = ROOT / "src-tauri" / "icons"
-
-
-def app_icon(size: int) -> Image.Image:
-    scale = 2
-    side = size * scale
-    image = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    margin = round(side * 0.055)
-    draw.rounded_rectangle(
-        (margin, margin, side - margin, side - margin),
-        radius=round(side * 0.23),
-        fill="#1b242e",
-        outline="#34404e",
-        width=max(2, round(side * 0.012)),
-    )
-    blue = "#9bb8ff"
-    line = max(8, round(side * 0.052))
-    draw.line((side * 0.5, side * 0.235, side * 0.5, side * 0.60), fill=blue, width=line)
-    draw.line((side * 0.355, side * 0.475, side * 0.5, side * 0.62, side * 0.645, side * 0.475), fill=blue, width=line, joint="curve")
-    draw.line((side * 0.275, side * 0.70, side * 0.725, side * 0.70), fill=blue, width=line)
-    draw.line((side * 0.32, side * 0.70, side * 0.36, side * 0.77, side * 0.64, side * 0.77, side * 0.68, side * 0.70), fill=blue, width=line, joint="curve")
-    return image.resize((size, size), Image.Resampling.LANCZOS)
+SIZES = (16, 24, 32, 48, 64, 128, 256, 512, 1024)
 
 
 def tray_icon(pending: bool, size: int = 64) -> Image.Image:
-    scale = 3
-    side = size * scale
+    side = size * 4
     image = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    color = "#cbd7e5"
-    line = round(side * 0.095)
-    draw.line((side * 0.5, side * 0.18, side * 0.5, side * 0.65), fill=color, width=line)
-    draw.line((side * 0.31, side * 0.48, side * 0.5, side * 0.67, side * 0.69, side * 0.48), fill=color, width=line, joint="curve")
-    draw.line((side * 0.23, side * 0.82, side * 0.77, side * 0.82), fill=color, width=line)
+    color = "#dce5f0"
+    center = side / 2
+    radius = side * .30
+    width = round(side * .085)
+    for start in (35, 215):
+        end = start + 145
+        points = [
+            (center + radius * math.cos(math.radians(angle)),
+             center + radius * math.sin(math.radians(angle)))
+            for angle in range(start, end + 1)
+        ]
+        draw.line(points, fill=color, width=width, joint="curve")
+        angle = math.radians(end)
+        x, y = points[-1]
+        tx, ty = -math.sin(angle), math.cos(angle)
+        nx, ny = math.cos(angle), math.sin(angle)
+        length = side * .14
+        draw.polygon([
+            (x + tx * length * .45, y + ty * length * .45),
+            (x - tx * length + nx * length * .7, y - ty * length + ny * length * .7),
+            (x - tx * length - nx * length * .7, y - ty * length - ny * length * .7),
+        ], fill=color)
     if pending:
-        radius = round(side * 0.17)
-        center = (round(side * 0.81), round(side * 0.2))
-        draw.ellipse((center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius), fill="#f2b45e", outline="#111820", width=max(2, round(side * 0.05)))
+        radius = round(side * .14)
+        x, y = round(side * .79), round(side * .20)
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius),
+                     fill="#f2b45e", outline="#1a202a", width=round(side * .035))
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def main() -> None:
-    ICON_DIR.mkdir(parents=True, exist_ok=True)
-    app_icon(1024).save(ICON_DIR / "app-icon.png", optimize=True)
-    for size in (32, 128, 256):
-        app_icon(size).save(ICON_DIR / f"{size}x{size}.png", optimize=True)
+    master = Image.open(ICON_DIR / "app-icon-master.png").convert("RGBA")
+    if master.width != master.height:
+        raise ValueError("The launcher master must be square")
+    for size in SIZES:
+        icon = master.resize((size, size), Image.Resampling.LANCZOS)
+        icon.save(ICON_DIR / f"{size}x{size}.png", optimize=True)
+        if size == 1024:
+            icon.save(ICON_DIR / "app-icon.png", optimize=True)
     tray_icon(False).save(ICON_DIR / "tray-normal.png", optimize=True)
     tray_icon(True).save(ICON_DIR / "tray-pending.png", optimize=True)
 

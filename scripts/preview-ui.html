@@ -2,7 +2,7 @@
 <html lang="es">
 <head><meta charset="UTF-8"><title>Vista de desarrollo · Actualizaciones</title></head>
 <body>
-  <nav><label>Estado: <select id="scenario"><option>current</option><option>checking</option><option>available</option><option>updating</option><option>error</option></select></label></nav>
+  <nav><label>Estado: <select id="scenario"><option>current</option><option>single</option><option>checking</option><option>available</option><option>updating</option><option>error</option></select></label></nav>
   <div id="preview"></div>
   <output id="commands">Sin comandos</output>
   <script type="module">
@@ -19,43 +19,67 @@
         { id: "codex-desktop", name: "Codex Desktop", installed: "26.928.20755", latest: "26.928.20755", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 },
         { id: "spotifast", name: "Spotifast", installed: "0.11.0", latest: "0.11.0", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 }
       ],
-      busy: scenario === "checking" || scenario === "updating",
-      checkingAll: scenario === "checking"
+      activeApps: [], checkingAll: scenario === "checking", revision: 0
     };
-    if (scenario === "checking") snapshot.apps.forEach((app) => { app.state = "checking"; });
-    if (scenario === "updating") snapshot.apps[0].state = "updating";
-    if (scenario === "available") {
-      snapshot.apps[0].state = "available";
+    if (scenario === "checking") snapshot.apps.forEach((app) => { app.state = "checking"; snapshot.activeApps.push(app.id); });
+    if (scenario === "single" || scenario === "updating") {
+      snapshot.apps[0].state = scenario === "updating" ? "updating" : "checking";
+      snapshot.activeApps.push(snapshot.apps[0].id);
+    }
+    if (scenario === "available" || scenario === "updating") {
       snapshot.apps[0].latest = "26.930.10000";
       snapshot.apps[0].updateAvailable = true;
+      if (scenario === "available") snapshot.apps[0].state = "available";
     }
     if (scenario === "error") {
       snapshot.apps[0].state = "error";
-      snapshot.apps[0].installed = null;
-      snapshot.apps[0].error = "/usr/lib/Actualizaciones/apps/codex-desktop/check.sh: línea 140: /usr/bin/gzcat: No existe el archivo o el directorio";
+      snapshot.apps[0].error = "No se pudo conectar con el servidor. Comprueba tu conexión.";
     }
-    const publish = () => emit("state-changed", structuredClone(snapshot));
+    const active = new Map();
+    const publish = async () => { snapshot.revision++; await emit("state-changed", structuredClone(snapshot)); };
+    const run = async (app, updating) => {
+      snapshot.activeApps.push(app.id);
+      app.state = updating ? "updating" : "checking";
+      app.error = null;
+      await publish();
+      await new Promise((resolve) => setTimeout(resolve, app.id === "codex-desktop" ? 2500 : 4000));
+      if (updating) app.installed = app.latest;
+      app.state = app.updateAvailable && !updating ? "available" : "current";
+      if (updating) app.updateAvailable = false;
+      app.checkedAt = Math.floor(Date.now() / 1000);
+      snapshot.activeApps = snapshot.activeApps.filter((id) => id !== app.id);
+      active.delete(app.id);
+      await publish();
+    };
     mockIPC(async (command, args) => {
       if (command === "get_state") return structuredClone(snapshot);
-      document.querySelector("#commands").textContent = command + (args?.id ? ": " + args.id : "");
-      if (snapshot.busy) throw "Espera a que termine la operación actual";
-      const selected = snapshot.apps.filter((app) => command === "check_all" || app.id === args?.id);
-      snapshot.busy = true;
-      snapshot.checkingAll = command === "check_all";
-      selected.forEach((app) => { app.state = command === "update_app" ? "updating" : "checking"; app.error = null; });
-      await publish();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      selected.forEach((app) => {
-        app.state = "current"; app.updateAvailable = false; app.checkedAt = Math.floor(Date.now() / 1000);
-        if (command === "update_app") app.installed = app.latest;
-      });
-      snapshot.busy = false;
-      snapshot.checkingAll = false;
-      await publish();
+      const output = document.querySelector("#commands");
+      output.textContent = (output.textContent === "Sin comandos" ? "" : output.textContent + " | ") + command + (args?.id ? ": " + args.id : "");
+      if (snapshot.checkingAll) throw "La verificación global está en curso";
+      if (command === "check_all") {
+        snapshot.checkingAll = true;
+        await publish();
+        await Promise.all(snapshot.apps.map((app) => {
+          if (active.has(app.id)) return active.get(app.id);
+          const worker = run(app, false);
+          active.set(app.id, worker);
+          return worker;
+        }));
+        snapshot.checkingAll = false;
+        await publish();
+      } else {
+        const app = snapshot.apps.find((app) => app.id === args?.id);
+        if (!app) throw "Aplicación desconocida";
+        if (active.has(app.id) || snapshot.activeApps.includes(app.id)) throw "Esta app ya está trabajando";
+        const worker = run(app, command === "update_app");
+        active.set(app.id, worker);
+        await worker;
+      }
+      return structuredClone(snapshot);
     }, { shouldMockEvents: true });
     await import("/src/main.ts");
     const style = document.createElement("style");
-    style.textContent = "html,body{height:auto;overflow:auto;background:#10141b}nav,#commands{display:block;width:540px;margin:20px auto;color:#a0adbf;font:13px Ubuntu,sans-serif}select{margin-left:8px;padding:5px}#preview{box-sizing:content-box;width:540px;height:390px;margin:0 auto;border:1px solid #34404e;box-shadow:0 16px 50px #0005}";
+    style.textContent = "html,body{height:auto;overflow:auto;background:#10141b}nav,#commands{display:block;width:540px;margin:20px auto;color:#a0adbf;font:13px Ubuntu,sans-serif}select{margin-left:8px;padding:5px}#preview{box-sizing:content-box;width:540px;height:278px;margin:0 auto;border:1px solid #34404e;box-shadow:0 16px 50px #0005}";
     document.head.append(style);
   </script>
 </body>
