@@ -15,4 +15,4 @@ if [[ -z $package || ! -f $package ]]; then
   exit 1
 fi
 package=$(realpath -- "$package")
-exec /usr/bin/pkexec /usr/bin/apt-get install -y "$package"
+exec /usr/bin/pkexec /usr/bin/apt-get install --reinstall -y "$package"
