@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod checkers;
+mod operations;
+use checkers::{Checkers, CheckResult};
+use operations::{Coordinator, PendingCheck};
+
 use nix::{sys::signal::{kill, Signal}, unistd::Pid};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -8,7 +13,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{atomic::{AtomicBool, Ordering}, Mutex as StdMutex},
+    sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex as StdMutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -19,9 +24,9 @@ use tauri::{
     AppHandle, Emitter, Manager, State, WebviewUrl,
 };
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
-use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
+use tokio::{process::Command, time::{sleep, timeout}};
 
-const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 const STALE_AFTER: u64 = 12 * 60 * 60;
 const PERIODIC_CHECK: Duration = Duration::from_secs(12 * 60 * 60);
@@ -32,7 +37,6 @@ const EVENT_STATE_CHANGED: &str = "state-changed";
 struct AppSpec {
     id: &'static str,
     name: &'static str,
-    check_script: &'static str,
     update_script: &'static str,
 }
 
@@ -40,13 +44,11 @@ const APPS: [AppSpec; 2] = [
     AppSpec {
         id: "codex-desktop",
         name: "Codex Desktop",
-        check_script: "apps/codex-desktop/check.sh",
         update_script: "apps/codex-desktop/update.sh",
     },
     AppSpec {
         id: "spotifast",
         name: "Spotifast",
-        check_script: "apps/spotifast/check.sh",
         update_script: "apps/spotifast/update.sh",
     },
 ];
@@ -103,22 +105,24 @@ impl Default for StoredState {
 #[serde(rename_all = "camelCase")]
 struct UiSnapshot {
     apps: Vec<AppStatus>,
-    busy: bool,
+    active_apps: Vec<String>,
     checking_all: bool,
+    revision: u64,
 }
 
 struct AppState {
     data: StdMutex<StoredState>,
     state_file: PathBuf,
-    operation: Mutex<()>,
-    busy: AtomicBool,
-    checking_all: AtomicBool,
+    coordinator: Coordinator,
+    checkers: Checkers,
+    publication: StdMutex<()>,
+    revision: AtomicU64,
     allow_exit: AtomicBool,
     process_groups: StdMutex<HashSet<i32>>,
 }
 
 impl AppState {
-    fn new(state_file: PathBuf, mut data: StoredState) -> Self {
+    fn new(state_file: PathBuf, mut data: StoredState) -> Result<Self, String> {
         for spec in APPS {
             if !data.apps.iter().any(|app| app.id == spec.id) {
                 data.apps.push(AppStatus::new(&spec));
@@ -138,22 +142,25 @@ impl AppState {
                 }
             }
         }
-        Self {
+        Ok(Self {
             data: StdMutex::new(data),
             state_file,
-            operation: Mutex::new(()),
-            busy: AtomicBool::new(false),
-            checking_all: AtomicBool::new(false),
+            coordinator: Coordinator::default(),
+            checkers: Checkers::new()?,
+            publication: StdMutex::new(()),
+            revision: AtomicU64::new(0),
             allow_exit: AtomicBool::new(false),
             process_groups: StdMutex::new(HashSet::new()),
-        }
+        })
     }
 
     fn snapshot(&self) -> UiSnapshot {
+        let (checking_all, active_apps) = self.coordinator.snapshot();
         UiSnapshot {
             apps: self.lock_data().apps.clone(),
-            busy: self.busy.load(Ordering::Relaxed),
-            checking_all: self.checking_all.load(Ordering::Relaxed),
+            active_apps,
+            checking_all,
+            revision: self.revision.load(Ordering::Relaxed),
         }
     }
 
@@ -162,6 +169,11 @@ impl AppState {
     }
 
     fn persist(&self) {
+        let _publication = self.publication.lock().unwrap_or_else(|e| e.into_inner());
+        self.write_state();
+    }
+
+    fn write_state(&self) {
         let snapshot = self.lock_data().clone();
         if let Err(error) = write_json_atomically(&self.state_file, &snapshot) {
             eprintln!("No se pudo guardar el estado: {error}");
@@ -183,13 +195,6 @@ impl AppState {
             let _ = kill(Pid::from_raw(-pid), signal);
         }
     }
-}
-
-#[derive(Deserialize)]
-struct CheckResult {
-    installed: String,
-    latest: String,
-    update_available: bool,
 }
 
 fn main() {
@@ -217,7 +222,7 @@ fn main() {
             }
             data.autostart_enabled = autostart_enabled;
 
-            app.manage(AppState::new(state_file, data));
+            app.manage(AppState::new(state_file, data).map_err(std::io::Error::other)?);
             let saved = app.state::<AppState>().lock_data().clone();
             build_tray(app, saved.autostart_enabled)?;
             app.state::<AppState>().persist();
@@ -264,23 +269,27 @@ fn get_state(state: State<'_, AppState>) -> UiSnapshot {
 }
 
 #[tauri::command]
-async fn check_all(app: AppHandle) -> Result<(), String> {
-    check_all_inner(app).await
+async fn check_all(app: AppHandle) -> Result<UiSnapshot, String> {
+    check_all_inner(app.clone()).await?;
+    Ok(app.state::<AppState>().snapshot())
 }
 
 #[tauri::command]
-async fn check_app(app: AppHandle, id: String) -> Result<(), String> {
-    let spec = app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
-    check_apps_inner(app, std::slice::from_ref(spec)).await
+async fn check_app(app: AppHandle, id: String) -> Result<UiSnapshot, String> {
+    let spec = *app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
+    let lease = app.state::<AppState>().coordinator.begin_app(spec.id)?;
+    check_one(app.clone(), spec).await;
+    drop(lease);
+    publish_state(&app);
+    Ok(app.state::<AppState>().snapshot())
 }
 
 #[tauri::command]
-async fn update_app(app: AppHandle, id: String) -> Result<(), String> {
-    let spec = app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
+async fn update_app(app: AppHandle, id: String) -> Result<UiSnapshot, String> {
+    let spec = *app_spec(&id).ok_or_else(|| "Aplicación desconocida".to_string())?;
     let state = app.state::<AppState>();
-    let _operation = state.operation.try_lock()
-        .map_err(|_| "Espera a que termine la operación actual".to_string())?;
-    let previous_version = {
+    let lease = state.coordinator.begin_app(spec.id)?;
+    {
         let mut data = state.lock_data();
         let status = data.apps.iter_mut().find(|item| item.id == spec.id).expect("registro de aplicación");
         if !status.update_available {
@@ -289,52 +298,86 @@ async fn update_app(app: AppHandle, id: String) -> Result<(), String> {
         status.state = "updating".to_string();
         status.error = None;
         status.notice = None;
-        status.installed.clone()
-    };
-    state.busy.store(true, Ordering::Relaxed);
+    }
     publish_state(&app);
+    if let Err(error) = install_and_confirm(&app, &spec).await {
+        set_error(&app, spec.id, error);
+    }
+    drop(lease);
+    publish_state(&app);
+    Ok(state.snapshot())
+}
 
-    let result = run_script(&app, spec.update_script, UPDATE_TIMEOUT).await;
-    match result {
-        Err(error) => set_error(&app, spec.id, error),
-        Ok(_) => {
-            {
-                let mut data = state.lock_data();
-                let status = data.apps.iter_mut().find(|item| item.id == spec.id).expect("registro de aplicación");
-                status.state = "checking".to_string();
-            }
-            publish_state(&app);
-            match read_check_result(&app, spec).await {
-                Ok(result) => {
-                    let mut data = state.lock_data();
-                    let status = data.apps.iter_mut().find(|item| item.id == spec.id).expect("registro de aplicación");
-                    let version_advanced = previous_version.as_deref() != Some(result.installed.as_str());
-                    status.installed = Some(result.installed);
-                    status.latest = Some(result.latest);
-                    status.update_available = result.update_available;
-                    status.checked_at = Some(now_seconds());
-                    if !version_advanced || status.update_available {
-                        status.state = "error".to_string();
-                        status.error = Some("La instalación terminó, pero no se confirmó una versión nueva".to_string());
-                    } else {
-                        status.state = "current".to_string();
-                        status.error = None;
-                        if spec.id == "codex-desktop" && codex_is_running() {
-                            status.notice = Some("Reinicia Codex Desktop para completar la actualización".to_string());
-                        }
-                    }
-                }
-                Err(error) => set_error(&app, spec.id, format!("No se pudo confirmar la versión instalada: {error}")),
-            }
+async fn install_and_confirm(app: &AppHandle, spec: &AppSpec) -> Result<(), String> {
+    let candidate = read_check_result(app, spec).await?;
+    if !candidate.update_available {
+        apply_check_result(&mut app.state::<AppState>().lock_data(), spec.id, candidate);
+        return Ok(());
+    }
+    run_script(app, spec.update_script, &candidate.latest, UPDATE_TIMEOUT).await?;
+    let result = read_check_result(app, spec).await
+        .map_err(|error| format!("No se pudo confirmar la versión instalada: {error}"))?;
+    let advanced = result.installed != candidate.installed;
+    let still_pending = result.update_available;
+    {
+        let state = app.state::<AppState>();
+        let mut data = state.lock_data();
+        apply_check_result(&mut data, spec.id, result);
+        let status = data.apps.iter_mut().find(|item| item.id == spec.id).expect("registro de aplicación");
+        if !advanced || still_pending {
+            status.state = "error".to_string();
+            status.error = Some("La instalación terminó, pero no se confirmó una versión nueva".to_string());
+        } else if spec.id == "codex-desktop" && codex_is_running() {
+            status.notice = Some("Reinicia Codex Desktop para completar la actualización".to_string());
         }
     }
-    state.busy.store(false, Ordering::Relaxed);
-    publish_state(&app);
     Ok(())
 }
 
 async fn check_all_inner(app: AppHandle) -> Result<(), String> {
-    check_apps_inner(app, &APPS).await
+    let ids: Vec<_> = APPS.iter().map(|spec| spec.id).collect();
+    let batch = app.state::<AppState>().coordinator.begin_all(&ids)?;
+    publish_state(&app);
+    // All workers start before awaiting any result. In-flight individual checks
+    // are joined through their completion ticket rather than run a second time.
+    let mut workers = Vec::new();
+    for (id, pending) in batch.checks {
+        let handle = app.clone();
+        workers.push((id, tauri::async_runtime::spawn(async move {
+            match pending {
+                PendingCheck::New(lease) => {
+                    check_one(handle.clone(), *app_spec(id).expect("aplicación registrada")).await;
+                    drop(lease);
+                    publish_state(&handle);
+                }
+                PendingCheck::Existing(mut completion) => {
+                    let _ = completion.wait_for(|finished| *finished).await;
+                }
+            }
+        })));
+    }
+    for (id, worker) in workers {
+        if worker.await.is_err() { set_error(&app, id, "La consulta se interrumpió. Vuelve a verificar.".to_string()); }
+    }
+    drop(batch.lease);
+    publish_state(&app);
+    Ok(())
+}
+
+async fn check_one(app: AppHandle, spec: AppSpec) {
+    {
+        let state = app.state::<AppState>();
+        let mut data = state.lock_data();
+        mark_checking(&mut data, std::slice::from_ref(&spec));
+    }
+    publish_state(&app);
+    match read_check_result(&app, &spec).await {
+        Ok(result) => {
+            apply_check_result(&mut app.state::<AppState>().lock_data(), spec.id, result);
+        }
+        Err(error) => set_error(&app, spec.id, error),
+    }
+    publish_state(&app);
 }
 
 fn mark_checking(data: &mut StoredState, specs: &[AppSpec]) {
@@ -346,56 +389,27 @@ fn mark_checking(data: &mut StoredState, specs: &[AppSpec]) {
     }
 }
 
-async fn check_apps_inner(app: AppHandle, specs: &[AppSpec]) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let _operation = state.operation.try_lock()
-        .map_err(|_| "Espera a que termine la operación actual".to_string())?;
-    state.busy.store(true, Ordering::Relaxed);
-    state.checking_all.store(specs.len() == APPS.len(), Ordering::Relaxed);
-    {
-        let mut data = state.lock_data();
-        mark_checking(&mut data, specs);
+fn apply_check_result(data: &mut StoredState, id: &str, result: CheckResult) {
+    if let Some(status) = data.apps.iter_mut().find(|item| item.id == id) {
+        status.installed = Some(result.installed);
+        status.latest = Some(result.latest);
+        status.update_available = result.update_available;
+        status.checked_at = Some(now_seconds());
+        status.state = if status.update_available { "available" } else { "current" }.to_string();
+        status.error = None;
     }
-    publish_state(&app);
-
-    for spec in specs {
-        match read_check_result(&app, spec).await {
-            Ok(result) => {
-                let mut data = state.lock_data();
-                if let Some(status) = data.apps.iter_mut().find(|item| item.id == spec.id) {
-                    status.installed = Some(result.installed);
-                    status.latest = Some(result.latest);
-                    status.update_available = result.update_available;
-                    status.checked_at = Some(now_seconds());
-                    status.state = if status.update_available { "available" } else { "current" }.to_string();
-                    status.error = None;
-                }
-            }
-            Err(error) => {
-                let mut data = state.lock_data();
-                if let Some(status) = data.apps.iter_mut().find(|item| item.id == spec.id) {
-                    status.state = "error".to_string();
-                    status.error = Some(error);
-                }
-            }
-        }
-        publish_state(&app);
-    }
-    state.busy.store(false, Ordering::Relaxed);
-    state.checking_all.store(false, Ordering::Relaxed);
-    publish_state(&app);
-    Ok(())
 }
 
 async fn read_check_result(app: &AppHandle, spec: &AppSpec) -> Result<CheckResult, String> {
-    let output = run_script(app, spec.check_script, CHECK_TIMEOUT).await?;
-    serde_json::from_slice::<CheckResult>(&output.stdout)
-        .map_err(|_| "El script devolvió una respuesta JSON no válida".to_string())
+    let state = app.state::<AppState>();
+    timeout(CHECK_TIMEOUT, state.checkers.check(spec.id)).await
+        .map_err(|_| "La consulta superó el tiempo límite. Vuelve a verificar.".to_string())?
 }
 
 async fn run_script(
     app: &AppHandle,
     script: &str,
+    target_version: &str,
     time_limit: Duration,
 ) -> Result<std::process::Output, String> {
     let path = script_path(app, script)?;
@@ -404,6 +418,7 @@ async fn run_script(
     }
     let mut command = Command::new("/usr/bin/bash");
     command.arg(path)
+        .env("ACTUALIZACIONES_TARGET_VERSION", target_version)
         .current_dir("/")
         .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         .stdout(Stdio::piped())
@@ -487,7 +502,9 @@ fn set_error(app: &AppHandle, id: &str, message: String) {
 
 fn publish_state(app: &AppHandle) {
     let state = app.state::<AppState>();
-    state.persist();
+    let _publication = state.publication.lock().unwrap_or_else(|e| e.into_inner());
+    state.revision.fetch_add(1, Ordering::Relaxed);
+    state.write_state();
     let _ = app.emit(EVENT_STATE_CHANGED, state.snapshot());
     update_tray(app);
 }
@@ -569,7 +586,7 @@ fn open_window(app: &AppHandle) {
     }
     match tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Actualizaciones")
-        .inner_size(540.0, 390.0)
+        .inner_size(540.0, 278.0)
         .resizable(false)
         .maximizable(false)
         .center()
@@ -673,9 +690,9 @@ mod tests {
     fn interrupted_checks_are_reset_when_reopening() {
         let mut data = StoredState::default();
         data.apps[0].state = "checking".to_string();
-        let state = AppState::new(PathBuf::from("unused"), data);
+        let state = AppState::new(PathBuf::from("unused"), data).unwrap();
         assert_eq!(state.snapshot().apps[0].state, "unchecked");
-        assert!(!state.snapshot().busy);
+        assert!(state.snapshot().active_apps.is_empty());
     }
 
     #[test]
@@ -684,6 +701,8 @@ mod tests {
             "No se pudieron consultar las versiones de Codex Desktop.");
         assert!(!script_error_message("/usr/lib/Actualizaciones/apps/check.sh: comando no encontrado").contains("/usr/lib"));
     }
+
+
 }
 
 fn signal_process_group(pid: i32, signal: Signal) {

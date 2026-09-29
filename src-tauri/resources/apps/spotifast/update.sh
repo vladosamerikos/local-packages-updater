@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for program in curl flatpak sha256sum awk jq; do
+for program in curl flatpak sha256sum awk; do
   if ! command -v "$program" >/dev/null 2>&1; then
     printf 'Falta el comando necesario: %s\n' "$program" >&2
     exit 1
   fi
 done
 
-status=$(/usr/bin/bash "$(dirname -- "$0")/check.sh") || exit $?
-latest=$(/usr/bin/jq -er '.latest | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' <<<"$status") || {
+latest=${ACTUALIZACIONES_TARGET_VERSION:-}
+if [[ ! $latest =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   printf 'La versión de Spotifast no es válida.\n' >&2
   exit 1
-}
+fi
 tag="v$latest"
 filename="spotifast-${tag}-x86_64.flatpak"
 base_url="https://github.com/crmne/spotifast/releases/download/${tag}"
