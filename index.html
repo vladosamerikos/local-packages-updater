@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Actualizaciones</title>
+  </head>
+  <body>
+    <main id="app" aria-label="Actualizaciones">
+      <header class="titlebar">
+        <h1>Actualizaciones</h1>
+        <button class="check-button" id="check-all" type="button">Comprobar</button>
+      </header>
+      <section class="app-list" id="app-list" aria-live="polite" aria-label="Aplicaciones">
+        <p class="loading">Cargando estado…</p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
