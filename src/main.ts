@@ -22,6 +22,8 @@ interface AppSnapshot {
   activeApps: AppId[];
   checkingAll: boolean;
   revision: number;
+  instanceId: string;
+  protocolVersion: number;
 }
 const list = document.querySelector<HTMLElement>("#app-list")!;
 const checkButton = document.querySelector<HTMLButtonElement>("#check-all")!;
@@ -77,16 +79,19 @@ function readableError(error: unknown): string {
 }
 function render(snapshot: AppSnapshot): void {
   // Events and completed commands can arrive in a different order.
-  if (currentSnapshot && snapshot.revision < currentSnapshot.revision) return;
+  if (snapshot.protocolVersion !== 1) { showFeedback("Protocolo del agente incompatible"); return; }
+  if (currentSnapshot?.instanceId === snapshot.instanceId && snapshot.revision < currentSnapshot.revision) return;
+  if (currentSnapshot && currentSnapshot.instanceId !== snapshot.instanceId) { pendingAll = false; pendingApps.clear(); }
   currentSnapshot = snapshot;
   const allActive = snapshot.checkingAll || pendingAll;
   checkButton.disabled = false;
   checkButton.setAttribute("aria-busy", String(allActive));
-  checkButton.innerHTML = icons.refresh + "<span>Verificar todas</span>";
+  const checkContents = icons.refresh + "<span>Verificar todas</span>";
+  if (checkButton.innerHTML !== checkContents) checkButton.innerHTML = checkContents;
   const focused = document.activeElement as HTMLButtonElement | null;
   const focusApp = focused?.dataset.app;
   const focusAction = focused?.dataset.action;
-  list.innerHTML = snapshot.apps.map((app) => {
+  const rows = snapshot.apps.map((app) => {
     const icon = iconFor[app.id];
     const pending = pendingApps.get(app.id);
     const active = snapshot.activeApps.includes(app.id) || !!pending || app.state === "checking" || app.state === "updating";
@@ -109,7 +114,16 @@ function render(snapshot: AppSnapshot): void {
         escapeHtml(app.name) + '" aria-busy="' + updating + '" ' + (allActive && !updating || checking ? "disabled" : "") + ">" +
         (updating ? icons.spinner : icons.download) + "<span>Actualizar</span></button>" : "") + "</div>" +
       (message ? '<p class="row-message ' + (app.state === "error" ? "row-message--error" : "") + '">' + escapeHtml(message) + "</p>" : "") + "</article>";
-  }).join("");
+  });
+  for (const row of rows) {
+    const template = document.createElement("template");
+    template.innerHTML = row;
+    const next = template.content.firstElementChild as HTMLElement;
+    const id = next.querySelector<HTMLButtonElement>("button[data-app]")?.dataset.app;
+    const existing = id ? list.querySelector<HTMLElement>('button[data-app="' + id + '"]')?.closest<HTMLElement>(".app-row") : null;
+    if (!existing) list.append(next);
+    else if (existing.outerHTML !== next.outerHTML) existing.replaceWith(next);
+  }
   if (focusApp && focusAction) {
     list.querySelector<HTMLButtonElement>('button[data-app="' + focusApp + '"][data-action="' + focusAction + '"]:not(:disabled)')?.focus({ preventScroll: true });
   }
@@ -127,7 +141,7 @@ async function request(command: "check_all" | "check_app" | "update_app", id?: A
   else if (id) pendingApps.set(id, command === "update_app" ? "update" : "check");
   if (currentSnapshot) render(currentSnapshot);
   try {
-    render(await invoke<AppSnapshot>(command, id ? { id } : undefined));
+    await invoke<string>(command, id ? { id, requestId: crypto.randomUUID() } : { requestId: crypto.randomUUID() });
   } catch (error) {
     showFeedback(error);
   } finally {
