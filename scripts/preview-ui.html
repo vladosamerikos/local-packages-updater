@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="UTF-8"><title>Vista de desarrollo · Actualizaciones</title></head>
+<body>
+  <nav><label>Estado: <select id="scenario"><option>current</option><option>checking</option><option>available</option><option>updating</option><option>error</option></select></label></nav>
+  <div id="preview"></div>
+  <output id="commands">Sin comandos</output>
+  <script type="module">
+    import { mockIPC } from "@tauri-apps/api/mocks";
+    import { emit } from "@tauri-apps/api/event";
+    const scenario = new URLSearchParams(location.search).get("state") ?? "current";
+    document.querySelector("#scenario").value = scenario;
+    document.querySelector("#scenario").onchange = (event) => { location.search = "?state=" + event.target.value; };
+    const template = new DOMParser().parseFromString(await (await fetch("/index.html")).text(), "text/html");
+    template.querySelector("script").remove();
+    document.querySelector("#preview").innerHTML = template.body.innerHTML;
+    const snapshot = {
+      apps: [
+        { id: "codex-desktop", name: "Codex Desktop", installed: "26.928.20755", latest: "26.928.20755", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 },
+        { id: "spotifast", name: "Spotifast", installed: "0.11.0", latest: "0.11.0", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 }
+      ],
+      busy: scenario === "checking" || scenario === "updating",
+      checkingAll: scenario === "checking"
+    };
+    if (scenario === "checking") snapshot.apps.forEach((app) => { app.state = "checking"; });
+    if (scenario === "updating") snapshot.apps[0].state = "updating";
+    if (scenario === "available") {
+      snapshot.apps[0].state = "available";
+      snapshot.apps[0].latest = "26.930.10000";
+      snapshot.apps[0].updateAvailable = true;
+    }
+    if (scenario === "error") {
+      snapshot.apps[0].state = "error";
+      snapshot.apps[0].installed = null;
+      snapshot.apps[0].error = "/usr/lib/Actualizaciones/apps/codex-desktop/check.sh: línea 140: /usr/bin/gzcat: No existe el archivo o el directorio";
+    }
+    const publish = () => emit("state-changed", structuredClone(snapshot));
+    mockIPC(async (command, args) => {
+      if (command === "get_state") return structuredClone(snapshot);
+      document.querySelector("#commands").textContent = command + (args?.id ? ": " + args.id : "");
+      if (snapshot.busy) throw "Espera a que termine la operación actual";
+      const selected = snapshot.apps.filter((app) => command === "check_all" || app.id === args?.id);
+      snapshot.busy = true;
+      snapshot.checkingAll = command === "check_all";
+      selected.forEach((app) => { app.state = command === "update_app" ? "updating" : "checking"; app.error = null; });
+      await publish();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      selected.forEach((app) => {
+        app.state = "current"; app.updateAvailable = false; app.checkedAt = Math.floor(Date.now() / 1000);
+        if (command === "update_app") app.installed = app.latest;
+      });
+      snapshot.busy = false;
+      snapshot.checkingAll = false;
+      await publish();
+    }, { shouldMockEvents: true });
+    await import("/src/main.ts");
+    const style = document.createElement("style");
+    style.textContent = "html,body{height:auto;overflow:auto;background:#10141b}nav,#commands{display:block;width:540px;margin:20px auto;color:#a0adbf;font:13px Ubuntu,sans-serif}select{margin-left:8px;padding:5px}#preview{box-sizing:content-box;width:540px;height:390px;margin:0 auto;border:1px solid #34404e;box-shadow:0 16px 50px #0005}";
+    document.head.append(style);
+  </script>
+</body>
+</html>

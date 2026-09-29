@@ -1,170 +1,126 @@
 :root {
-  font-family: Ubuntu, "Cantarell", system-ui, sans-serif;
-  color: #f1f5f9;
-  background: #111820;
+  font-family: Ubuntu, Cantarell, system-ui, sans-serif;
+  color: #edf1f7;
+  background: #1a202a;
   color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-
-  --page: #111820;
-  --surface: #1b242e;
-  --rule: #34404e;
-  --ink: #f1f5f9;
-  --muted: #a5b2c1;
-  --blue: #7fa7ff;
-  --amber: #f2b45e;
-  --green: #8bd6ad;
+  --surface: #1a202a;
+  --header: #202735;
+  --rule: #303a49;
+  --ink: #edf1f7;
+  --muted: #a0adbf;
+  --blue: #a8c5ff;
+  --green: #9cdeb9;
+  --amber: #efc18a;
 }
-
 * { box-sizing: border-box; }
-
-html, body { width: 100%; min-width: 360px; min-height: 100%; margin: 0; }
-
-body { overflow-y: auto; background: var(--page); }
-
+html, body { width: 100%; height: 100%; margin: 0; }
+body { overflow: hidden; background: var(--surface); }
 button { font: inherit; cursor: pointer; }
-
-#app {
-  width: min(100%, 480px);
-  min-height: 214px;
-  margin: 0 auto;
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.titlebar {
-  min-height: 66px;
+button svg, .app-status svg, .app-footer svg { width: 16px; height: 16px; flex: none; }
+#app { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+.app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 22px;
+  min-height: 76px;
+  padding: 18px 24px;
+  background: var(--header);
   border-bottom: 1px solid var(--rule);
 }
-
-h1 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 20px;
-  line-height: 1.2;
-  font-weight: 700;
-  letter-spacing: -0.35px;
-}
-
-.check-button {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid #415574;
-  border-radius: 7px;
-  background: #253344;
-  color: #bed2ff;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.check-button:hover:not(:disabled) { background: #2e4056; }
-
-.app-list { padding: 7px 22px 11px; }
-
-.app-row {
-  min-height: 82px;
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-}
-
-.app-row + .app-row { border-top: 1px solid var(--rule); }
-
-.app-icon {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 9px;
-  background: #263444;
-}
-
-.app-icon img { width: 100%; height: 100%; object-fit: contain; }
-
-.app-icon--codex img { width: 25px; height: 25px; }
-
-.app-icon--spotifast { background: #1c352a; }
-.app-icon--spotifast img { width: 30px; height: 30px; }
-
-.app-copy { min-width: 0; }
-
-.app-name {
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.version-line {
-  min-height: 16px;
-  margin-top: 5px;
-  overflow: hidden;
-  color: var(--muted);
-  font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.version-arrow { margin: 0 4px; color: var(--amber); }
-
-.action-button {
-  min-height: 32px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--blue);
-  color: #101b2a;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.action-button:hover:not(:disabled) { background: #a1bfff; }
-
-.current-status {
+h1 { margin: 0; font-size: 18px; line-height: 1.25; font-weight: 600; letter-spacing: -.3px; }
+.check-button, .verify-button, .update-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding-right: 1px;
-  color: var(--muted);
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   font-size: 12px;
-  font-weight: 600;
+  line-height: 1;
+  font-weight: 500;
   white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease;
 }
-
-.current-status svg { width: 14px; height: 14px; color: var(--green); }
-
-.row-message {
-  grid-column: 2 / 4;
-  align-self: start;
-  margin: -17px 0 11px;
+.check-button { background: #354a6a; border-color: #4a6388; color: #e5eeff; }
+.check-button:hover:not(:disabled) { background: #405b83; border-color: #6c8bb4; }
+.app-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.app-row {
+  flex: 1;
+  min-height: 124px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-content: center;
+  align-items: start;
+  column-gap: 14px;
+  row-gap: 10px;
+  padding: 18px 24px;
+}
+.app-row + .app-row { border-top: 1px solid var(--rule); }
+.app-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #2b3748;
+}
+.app-icon img { display: block; object-fit: contain; }
+.app-icon--codex img { width: 30px; height: 30px; }
+.app-icon--spotifast { background: #20372c; }
+.app-icon--spotifast img { width: 36px; height: 36px; }
+.app-copy { min-width: 0; padding-top: 1px; }
+h2 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.15px; }
+.version-line {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
-
-.row-message--error { color: #f0ba8c; }
-
-.loading { margin: 18px 0; color: var(--muted); font-size: 13px; }
-
-button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-button:disabled { cursor: wait; opacity: .62; }
-
-@media (max-width: 420px) {
-  .titlebar { padding: 0 16px; }
-  .app-list { padding-right: 16px; padding-left: 16px; }
-  .app-row { gap: 9px; }
-  .action-button { padding: 0 9px; }
+.version-number { color: #bac5d5; }
+.version-arrow { padding: 0 6px; color: var(--muted); }
+.version-new { color: var(--blue); }
+.app-status { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; line-height: 18px; color: var(--muted); }
+.app-status svg { width: 14px; height: 14px; }
+.app-status--current { color: var(--green); }
+.app-status--available, .app-status--checking, .app-status--updating { color: var(--blue); }
+.app-status--error { color: var(--amber); }
+.row-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 3px; }
+.verify-button { border-color: #3a485b; background: #252f3d; color: #c5d0df; }
+.verify-button:hover:not(:disabled) { background: #303e51; border-color: #5a718f; color: #f0f5fc; }
+.update-button { color: #172338; background: #a8c5ff; }
+.update-button:hover:not(:disabled) { background: #c2d7ff; }
+.row-message { grid-column: 2 / 4; margin: 0; color: var(--muted); font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
+.row-message--error { color: var(--amber); }
+.app-row--message { min-height: 151px; }
+.app-footer { display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 10px 24px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 11px; line-height: 16px; background: #181e27; }
+.app-footer svg { width: 13px; height: 13px; }
+.app-footer--error { color: var(--amber); }
+.loading { margin: 28px 24px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.spinner { width: 14px; height: 14px; display: inline-block; flex: none; border: 1.8px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .85s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+button:focus-visible { outline: 2px solid #b9d0ff; outline-offset: 3px; }
+button:disabled { cursor: default; opacity: .45; }
+.check-button[aria-busy="true"] { opacity: .85; }
+@media (max-width: 440px) {
+  .app-header, .app-row, .app-footer { padding-left: 16px; padding-right: 16px; }
+  .app-row { column-gap: 10px; grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .app-icon { width: 36px; height: 36px; border-radius: 10px; }
+  .app-icon--codex img { width: 26px; height: 26px; }
+  .app-icon--spotifast img { width: 30px; height: 30px; }
+  .check-button, .verify-button, .update-button { padding: 0 9px; }
+  h2 { font-size: 14px; }
 }
-
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
