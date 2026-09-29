@@ -63,7 +63,7 @@ fi
 if [[ $http_code == 200 ]]; then
   install -m 600 -- "$tmp_dir/InRelease" "$cached_inrelease.new"
   mv -f -- "$cached_inrelease.new" "$cached_inrelease"
-  /usr/bin/awk 'tolower($1) == "etag:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' \
+  /usr/bin/awk 'tolower($1) == "etag:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); etag=$0 } END { if (etag) print etag }' \
     "$tmp_dir/headers" >"$cached_etag.new"
   chmod 600 -- "$cached_etag.new"
   mv -f -- "$cached_etag.new" "$cached_etag"

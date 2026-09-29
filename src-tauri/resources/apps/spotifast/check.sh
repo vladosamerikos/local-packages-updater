@@ -56,7 +56,7 @@ elif [[ $http_code == 200 ]]; then
   }
   install -m 600 -- "$tmp_dir/releases.json" "$cache_json.new"
   mv -f -- "$cache_json.new" "$cache_json"
-  /usr/bin/awk 'tolower($1) == "etag:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' \
+  /usr/bin/awk 'tolower($1) == "etag:" { sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); etag=$0 } END { if (etag) print etag }' \
     "$tmp_dir/headers" >"$cache_etag.new"
   chmod 600 -- "$cache_etag.new"
   mv -f -- "$cache_etag.new" "$cache_etag"
