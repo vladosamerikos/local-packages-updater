@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Obtener código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Comprobar versión de la etiqueta
         run: |
@@ -21,7 +21,7 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Preparar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
