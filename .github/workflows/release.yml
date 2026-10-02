@@ -53,7 +53,10 @@ jobs:
           dpkg-deb -c "$deb" > /tmp/actualizaciones-deb-manifest.txt
           grep -q 'usr/bin/actualizaciones-agent$' /tmp/actualizaciones-deb-manifest.txt
           grep -q 'usr/share/applications/es.vlad.actualizaciones.desktop$' /tmp/actualizaciones-deb-manifest.txt
-          sha256sum "$deb" > "$deb.sha256"
+          (
+            cd artifacts
+            sha256sum "Actualizaciones_${version}_amd64.deb" > "Actualizaciones_${version}_amd64.deb.sha256"
+          )
 
       - name: Publicar release
         env:
