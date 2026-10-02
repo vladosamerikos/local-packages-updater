@@ -19,13 +19,22 @@ async fn get_state() -> Result<serde_json::Value, String> {
     let answer: String = proxy(&connection).await?.call("GetState", &()).await.map_err(|error| error.to_string())?;
     serde_json::from_str(&answer).map_err(|error| error.to_string())
 }
-async fn start(method: &str, id: Option<&str>, request_id: &str) -> Result<String, String> {
+async fn start_once(method: &str, id: Option<&str>, request_id: &str) -> Result<String, String> {
     let connection = agent_connection().await?;
     let proxy = proxy(&connection).await?;
     match id {
         Some(id) => proxy.call(method, &(id, request_id)).await,
         None => proxy.call(method, &(request_id,)).await,
     }.map_err(|error| error.to_string())
+}
+async fn start(method: &str, id: Option<&str>, request_id: &str) -> Result<String, String> {
+    match start_once(method, id, request_id).await {
+        Ok(operation) => Ok(operation),
+        Err(first_error) => {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            start_once(method, id, request_id).await.map_err(|_| first_error)
+        }
+    }
 }
 #[tauri::command]
 async fn check_all(request_id: String) -> Result<String, String> { start("StartCheckAll", None, &request_id).await }
@@ -45,7 +54,11 @@ fn open_window(app: &tauri::AppHandle) {
 }
 fn main() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| open_window(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|argument| argument == "--close") {
+                if let Some(window) = app.get_webview_window("main") { let _ = window.close(); }
+            } else { open_window(app); }
+        }))
         .invoke_handler(tauri::generate_handler![get_state, check_all, check_app, update_app])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -56,6 +69,7 @@ fn main() {
                         Ok(connection) => match proxy(&connection).await {
                             Ok(proxy) => {
                                 if let Ok(mut state_events) = proxy.receive_signal("StateChanged").await {
+                                    let mut finished_events = proxy.receive_signal("OperationFinished").await.ok();
                                     let bus_proxy = Proxy::new(&connection, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus").await;
                                     let mut owner_events = match bus_proxy {
                                         Ok(bus_proxy) => bus_proxy.receive_signal("NameOwnerChanged").await.ok(),
@@ -71,6 +85,13 @@ fn main() {
                                                     if let Ok(snapshot) = serde_json::from_str::<serde_json::Value>(&payload) { let _ = handle.emit("state-changed", snapshot); }
                                                 },
                                                 None => break,
+                                            },
+                                            finished = async { finished_events.as_mut().unwrap().next().await }, if finished_events.is_some() => {
+                                                if let Some(message) = finished {
+                                                    if let Ok((operation_id, error)) = message.body().deserialize::<(String, String)>() {
+                                                        let _ = handle.emit("operation-finished", serde_json::json!({"operationId": operation_id, "error": error}));
+                                                    }
+                                                } else { finished_events = None; }
                                             },
                                             owner = async { owner_events.as_mut().unwrap().next().await }, if owner_events.is_some() => {
                                                 if let Some(message) = owner {

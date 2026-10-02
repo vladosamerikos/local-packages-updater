@@ -160,6 +160,9 @@ list.addEventListener("click", (event) => {
 async function initialize(): Promise<void> {
   try {
     await listen<AppSnapshot>("state-changed", ({ payload }) => render(payload));
+    await listen<{ operationId: string; error: string }>("operation-finished", ({ payload }) => {
+      if (payload.error) showFeedback(payload.error);
+    });
     render(await invoke<AppSnapshot>("get_state"));
   } catch (error) {
     checkButton.disabled = false;

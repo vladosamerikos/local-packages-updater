@@ -19,7 +19,8 @@
         { id: "codex-desktop", name: "Codex Desktop", installed: "26.928.20755", latest: "26.928.20755", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 },
         { id: "spotifast", name: "Spotifast", installed: "0.11.0", latest: "0.11.0", updateAvailable: false, state: "current", error: null, notice: null, checkedAt: 1790710000 }
       ],
-      activeApps: [], checkingAll: scenario === "checking", revision: 0
+      activeApps: [], checkingAll: scenario === "checking", revision: 0,
+      instanceId: "preview", protocolVersion: 1
     };
     if (scenario === "checking") snapshot.apps.forEach((app) => { app.state = "checking"; snapshot.activeApps.push(app.id); });
     if (scenario === "single" || scenario === "updating") {
@@ -59,23 +60,20 @@
       if (command === "check_all") {
         snapshot.checkingAll = true;
         await publish();
-        await Promise.all(snapshot.apps.map((app) => {
+        void Promise.all(snapshot.apps.map((app) => {
           if (active.has(app.id)) return active.get(app.id);
           const worker = run(app, false);
           active.set(app.id, worker);
           return worker;
-        }));
-        snapshot.checkingAll = false;
-        await publish();
+        })).then(async () => { snapshot.checkingAll = false; await publish(); });
       } else {
         const app = snapshot.apps.find((app) => app.id === args?.id);
         if (!app) throw "Aplicación desconocida";
         if (active.has(app.id) || snapshot.activeApps.includes(app.id)) throw "Esta app ya está trabajando";
         const worker = run(app, command === "update_app");
         active.set(app.id, worker);
-        await worker;
       }
-      return structuredClone(snapshot);
+      return crypto.randomUUID();
     }, { shouldMockEvents: true });
     await import("/src/main.ts");
     const style = document.createElement("style");

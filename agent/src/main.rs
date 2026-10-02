@@ -102,7 +102,10 @@ impl Agent {
     async fn operation_finished(emitter: &SignalEmitter<'_>, operation_id: &str, error: &str) -> zbus::Result<()>;
 }
 fn autostart_path() -> PathBuf { PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/autostart").join(AUTOSTART) }
-fn autostart_enabled() -> bool { autostart_path().is_file() }
+fn autostart_enabled() -> bool {
+    let Ok(entry) = std::fs::read_to_string(autostart_path()) else { return false };
+    !entry.lines().any(|line| matches!(line.trim(), "Hidden=true" | "X-GNOME-Autostart-enabled=false"))
+}
 fn set_autostart(enabled: bool) -> std::io::Result<()> {
     let path = autostart_path();
     if enabled {
@@ -132,8 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     core.set_autostart(autostart_enabled());
     let agent = Agent::new(core.clone());
     let conn = Connection::session().await?;
-    conn.request_name_with_flags(BUS, zbus::fdo::RequestNameFlags::DoNotQueue.into()).await?;
     conn.object_server().at(PATH, agent.clone()).await?;
+    // Export the object before claiming the name: activation may queue GetState.
+    conn.request_name_with_flags(BUS, zbus::fdo::RequestNameFlags::DoNotQueue.into()).await?;
     let (actions, mut incoming) = mpsc::unbounded_channel();
     let tray = Tray { actions, pending: core.snapshot().apps.iter().any(|app| app.update_available), autostart: autostart_enabled() };
     let tray_handle = tray.spawn().await?;

@@ -20,6 +20,7 @@ staging=$(mktemp -d)
 trap 'rm -rf -- "$staging"' EXIT
 dpkg-deb -R "$deb" "$staging"
 install -m 0755 target/release/actualizaciones-agent "$staging/usr/bin/actualizaciones-agent"
+mv "$staging/usr/share/applications/Actualizaciones.desktop" "$staging/usr/share/applications/es.vlad.actualizaciones.desktop"
 install -d "$staging/usr/share/dbus-1/services"
 install -m 0644 agent/linux/es.vlad.Actualizaciones.Agent.service "$staging/usr/share/dbus-1/services/"
 mkdir -p artifacts

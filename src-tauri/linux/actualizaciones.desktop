@@ -7,3 +7,4 @@ Icon={{icon}}
 Terminal=false
 Categories={{categories}}
 StartupNotify=false
+StartupWMClass=actualizaciones
