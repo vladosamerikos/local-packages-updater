@@ -115,6 +115,7 @@ function render(snapshot: AppSnapshot): void {
         (updating ? icons.spinner : icons.download) + "<span>Actualizar</span></button>" : "") + "</div>" +
       (message ? '<p class="row-message ' + (app.state === "error" ? "row-message--error" : "") + '">' + escapeHtml(message) + "</p>" : "") + "</article>";
   });
+  list.querySelectorAll(".loading").forEach((placeholder) => placeholder.remove());
   for (const row of rows) {
     const template = document.createElement("template");
     template.innerHTML = row;
@@ -166,7 +167,9 @@ async function initialize(): Promise<void> {
     render(await invoke<AppSnapshot>("get_state"));
   } catch (error) {
     checkButton.disabled = false;
-    list.innerHTML = '<p class="loading">No se pudo cargar el estado. Pulsa «Verificar todas» para reintentar.</p>';
+    if (!currentSnapshot) {
+      list.innerHTML = '<p class="loading">No se pudo cargar el estado. Pulsa «Verificar todas» para reintentar.</p>';
+    }
     showFeedback(error);
   }
 }
