@@ -40,7 +40,13 @@ if [[ -n $agent_pid ]]; then
 fi
 # Stop only the old resident UI, never unrelated WebKit processes.
 if [[ -n $old_pid ]]; then
-  kill -TERM "$old_pid"
+  # Shutdown of the agent may already have closed the UI.
+  kill -TERM "$old_pid" 2>/dev/null || {
+    if kill -0 "$old_pid" 2>/dev/null; then
+      printf 'No se pudo cerrar la ventana anterior.\n' >&2
+      exit 1
+    fi
+  }
   for ((i=0;i<40;i++)); do kill -0 "$old_pid" 2>/dev/null || break; sleep .25; done
 fi
 if /usr/bin/pkexec /usr/bin/apt-get install --reinstall -y "$package"; then
