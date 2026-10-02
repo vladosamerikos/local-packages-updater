@@ -5,3 +5,18 @@ src-tauri/gen/
 artifacts/
 *.log
 target/
+
+# Configuración local y archivos de los editores
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Resultados de compilación y pruebas
+coverage/
+*.deb
+*.AppImage
