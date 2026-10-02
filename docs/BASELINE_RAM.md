@@ -9,3 +9,5 @@
 | **Total** | **224768** | **74793** | **48364** |
 
 La app no tenía proceso WebKitWebProcess en ese instante. No es una comparación pareada ni fija un ahorro esperado. El watcher de GNOME `org.kde.StatusNotifierWatcher` estaba activo y el prototipo `ksni` se registró como `org.kde.StatusNotifierItem-202267-1`. El proceso del prototipo no cargó bibliotecas GTK, WebKit ni Tauri según `/proc/<pid>/maps`.
+
+Otra muestra, con la ventana 0.3.0 abierta y estabilizada tres segundos, dio 423268 KiB RSS, 183868 KiB PSS y 134092 KiB privados para el árbol formado por `actualizaciones`, `WebKitNetworkProcess` y `WebKitWebProcess`. Se tomó más tarde en la misma sesión, por lo que sirve de orientación, no de comparación perfectamente pareada.
